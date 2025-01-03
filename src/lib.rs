@@ -1,10 +1,7 @@
 use std::iter;
 
 use winit::{
-    event::*,
-    event_loop::EventLoop,
-    window::{ WindowBuilder, Window },
-    dpi::{ LogicalSize, PhysicalSize },
+    dpi::{ LogicalSize, PhysicalSize }, event::*, event_loop::EventLoop, keyboard::{KeyCode, PhysicalKey}, window::{ Window, WindowBuilder }
 };
 use wgpu::{
     Surface, Device, Queue, SurfaceConfiguration, Instance, InstanceDescriptor,
@@ -15,25 +12,28 @@ use wgpu::{
 };
 use log::{ info, error };
 
-struct GraphicsState {
-    surface: Surface,
+struct GraphicsState<'a> {
+    surface: Surface<'a>,
     device: Device,
     queue: Queue,
     config: SurfaceConfiguration,
     size: PhysicalSize<u32>,
-    window: Window,
+    window: &'a Window,
 }
 
-impl GraphicsState {
-    pub async fn new(window: Window) -> Self {
+impl<'a> GraphicsState<'a> {
+    pub async fn new(window: &'a Window) -> GraphicsState<'a> {
         let size = window.inner_size();
 
         let instance = Instance::new(InstanceDescriptor {
-            backends: Backends::all(),
+            #[cfg(not(target_arch="wasm32"))]
+            backends: Backends::PRIMARY,
+            #[cfg(target_arch="wasm32")]
+            backends: Backends::GL,
             ..Default::default()
         });
 
-        let surface = unsafe { instance.create_surface(&window) }.unwrap();
+        let surface = instance.create_surface(window).unwrap();
 
         let adapter = instance.request_adapter(
             &RequestAdapterOptions {
@@ -45,21 +45,22 @@ impl GraphicsState {
 
         let (device, queue) = adapter.request_device(
             &DeviceDescriptor {
-                features: Features::empty(),
-                limits: if cfg!(target_arch = "wasm32") {
+                required_features: Features::empty(),
+                required_limits: if cfg!(target_arch = "wasm32") {
                     Limits::downlevel_webgl2_defaults()
                 } else {
                     Limits::default()
                 },
                 label: None,
+                memory_hints: Default::default(),
             },
             None,
         ).await.unwrap();
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps.formats.iter()
-            .copied()
             .find(|f| f.is_srgb())
+            .copied()
             .unwrap_or(surface_caps.formats[0]);
 
         let config = SurfaceConfiguration {
@@ -70,6 +71,7 @@ impl GraphicsState {
             present_mode: surface_caps.present_modes[0],
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
+            desired_maximum_frame_latency: 2,
         };
 
         surface.configure(&device, &config);
@@ -147,23 +149,36 @@ pub async fn run() {
         .with_inner_size(LogicalSize::new(512.0, 512.0))
         .build(&event_loop).unwrap();
 
-    let mut graphics_state: GraphicsState = GraphicsState::new(window).await;
+    let mut graphics_state: GraphicsState = GraphicsState::new(&window).await;
 
     info!("Starting up window.");
 
-    let _ = event_loop.run(move | event, elwt | {
+    let _ = event_loop.run(move | event, control_flow | {
         match event {
             Event::WindowEvent {
-                window_id, event: win_event
-            } if window_id == graphics_state.window().id() => if !graphics_state.input(&win_event) {
-                match win_event {
-                    WindowEvent::CloseRequested => { elwt.exit(); }
+                window_id, ref event
+            } if window_id == graphics_state.window().id() => if !graphics_state.input(event) {
+                match event {
+                    WindowEvent::CloseRequested | WindowEvent::KeyboardInput {
+                        event: KeyEvent {
+                            state: ElementState::Pressed,
+                            physical_key: PhysicalKey::Code(KeyCode::Escape),
+                            ..
+                        },
+                        ..
+                    }=> { control_flow.exit(); }
 
                     WindowEvent::Resized(physical_size) => {
-                        graphics_state.resize(physical_size);
+                        graphics_state.resize(*physical_size);
                     }
 
                     WindowEvent::RedrawRequested => {
+                        graphics_state.window().request_redraw();
+
+                        // if !surface_configured {
+                        //     return;
+                        // }
+
                         graphics_state.update();
 
                         match graphics_state.render() {
@@ -174,10 +189,17 @@ pub async fn run() {
                             },
 
                             Err(SurfaceError::OutOfMemory) => {
-                                elwt.exit();
+                                error!("Out of memory!");
+                                control_flow.exit();
                             }
 
-                            Err(e) => { error!("{:?}", e); }
+                            Err(SurfaceError::Timeout) => {
+                                error!("Surface Timeout!");
+                            }
+
+                            Err(SurfaceError::Outdated) => {
+                                // error!("Surface Outdated!");
+                            // }
                         }
                     }
 
