@@ -12,6 +12,11 @@ use wgpu::{
 };
 use log::{ info, error };
 
+enum UpdateType {
+    Pos((u16, u16)),
+    NONE,
+}
+
 struct GraphicsState<'a> {
     surface: Surface<'a>,
     device: Device,
@@ -19,6 +24,7 @@ struct GraphicsState<'a> {
     config: SurfaceConfiguration,
     size: PhysicalSize<u32>,
     window: &'a Window,
+    pos: (u16, u16),
 }
 
 impl<'a> GraphicsState<'a> {
@@ -83,6 +89,7 @@ impl<'a> GraphicsState<'a> {
             queue,
             config,
             size,
+            pos: (0, 0),
         }
     }
 
@@ -101,7 +108,12 @@ impl<'a> GraphicsState<'a> {
         false
     }
 
-    fn update(&mut self) {}
+    fn update(&mut self, update_type: UpdateType) {
+        match update_type {
+            UpdateType::Pos(pos) => self.pos = pos,
+            UpdateType::NONE => {}
+        }
+    }
 
     fn render(&mut self) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
@@ -118,8 +130,10 @@ impl<'a> GraphicsState<'a> {
                     resolve_target: None,
                     ops: Operations {
                         load: LoadOp::Clear(Color {
-                            r: 0.1,
-                            g: 0.2,
+                            // r: 0.1,
+                            r: self.pos.0 as f64 / self.size.width as f64,
+                            // g: 0.2,
+                            g: self.pos.1 as f64 / self.size.height as f64,
                             b: 0.3,
                             a: 1.0,
                         }),
@@ -166,9 +180,10 @@ pub async fn run() {
                             ..
                         },
                         ..
-                    }=> { control_flow.exit(); }
+                    } => { control_flow.exit(); }
 
                     WindowEvent::Resized(physical_size) => {
+                        info!("resizing");
                         graphics_state.resize(*physical_size);
                     }
 
@@ -179,7 +194,7 @@ pub async fn run() {
                         //     return;
                         // }
 
-                        graphics_state.update();
+                        graphics_state.update(UpdateType::NONE);
 
                         match graphics_state.render() {
                             Ok(_) => {}
@@ -198,9 +213,17 @@ pub async fn run() {
                             }
 
                             Err(SurfaceError::Outdated) => {
-                                // error!("Surface Outdated!");
-                            // }
+                                error!("Surface Outdated!");
+                            }
                         }
+                    }
+
+                    WindowEvent::CursorMoved {
+                        device_id,
+                        position,
+                    } => {
+                        error!("position: x: {}, y: {}", position.x, position.y);
+                        graphics_state.update(UpdateType::Pos((position.x as u16, position.y as u16)));
                     }
 
                     // WindowEvent::MainEventsCleared => {
